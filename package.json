@@ -1,0 +1,49 @@
+{
+  "name": "opencode-copilot-enhanced",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for enhanced GitHub Copilot support — dynamic model sync, proper token exchange, and configurable OAuth",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "opencode",
+    "copilot",
+    "github",
+    "plugin",
+    "ai",
+    "llm"
+  ],
+  "author": "Adam Hassan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Adamkadaban/opencode-copilot-enhanced.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Adamkadaban/opencode-copilot-enhanced/issues"
+  },
+  "homepage": "https://github.com/Adamkadaban/opencode-copilot-enhanced#readme",
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=0.15.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.0.0",
+    "@types/bun": "^1.3.1",
+    "typescript": "^5.9.3"
+  }
+}
