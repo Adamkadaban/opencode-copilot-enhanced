@@ -8,6 +8,7 @@ OpenCode plugin for enhanced GitHub Copilot support — dynamic model sync, prop
 - **Proper token exchange** — exchanges OAuth tokens for Copilot session tokens via `/copilot_internal/v2/token` with caching and refresh-before-expiry (matches VS Code behavior)
 - **Copilot-specific headers** — adds `Copilot-Integration-Id`, `Editor-Version`, `Editor-Plugin-Version`, `X-GitHub-Api-Version` to all requests
 - **Configurable OAuth** — override the `client_id` and OAuth `scope` via config file
+- **Config sync** — writes the live Copilot model list into `~/.config/opencode/opencode.json` so opencode loads custom/internal models automatically
 
 ## Install
 
@@ -44,7 +45,8 @@ On each provider load:
 1. Exchanges the stored OAuth token for a short-lived Copilot session token
 2. Fetches the live model catalog from the Copilot API
 3. Merges live model capabilities (context windows, reasoning efforts, modalities) with the static `models.dev` data
-4. Returns a custom `fetch` that injects the session token and required Copilot headers
+4. Writes the merged model list to `~/.config/opencode/opencode.json` under `provider.github-copilot.models`
+5. Returns a custom `fetch` that injects the session token and required Copilot headers
 
 ## Note on duplicate login option
 

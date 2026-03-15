@@ -3,6 +3,8 @@ import { load } from "./config.js";
 import { exchange } from "./token.js";
 import { sync, normalize, type Provider } from "./models.js";
 import { setTimeout as sleep } from "node:timers/promises";
+import os from "node:os";
+import path from "node:path";
 
 const VERSION = "1.0.0";
 const POLL_MARGIN = 3000; // 3 s safety buffer for OAuth polling
@@ -37,8 +39,16 @@ export const plugin: Plugin = async (input) => {
             .then((api) => {
               baseURL = api;
             })
-            .catch(() => {});
+            .catch((err) => {
+              console.error("[opencode-copilot-enhanced] sync failed:", err);
+            });
 
+          await writeModels(provider.models).catch((err) => {
+            console.error(
+              "[opencode-copilot-enhanced] config update failed:",
+              err,
+            );
+          });
           for (const model of Object.values(provider.models)) {
             model.cost = { input: 0, output: 0, cache: { read: 0, write: 0 } };
             model.api.npm = "@ai-sdk/github-copilot";
@@ -337,3 +347,53 @@ function detect(url: string, init?: RequestInit) {
 }
 
 export default plugin;
+
+async function writeModels(models: Provider["models"]) {
+  const file = path.join(os.homedir(), ".config", "opencode", "opencode.json");
+  const item = Bun.file(file);
+  const has = await item.exists();
+  const cfg = has
+    ? await item.json().catch(() => ({}))
+    : { $schema: "https://opencode.ai/config.json" };
+  const map = cfg.provider ?? {};
+  const entry = map["github-copilot"] ?? {};
+  const prev = entry.models ?? {};
+  const next: Record<string, any> = { ...prev };
+
+  for (const model of Object.values(models)) {
+    const status = ["alpha", "beta", "deprecated"].includes(model.status)
+      ? { status: model.status }
+      : {};
+    next[model.id] = {
+      id: model.id,
+      name: model.name,
+      family: model.family,
+      ...status,
+      reasoning: model.capabilities.reasoning,
+      attachment: model.capabilities.attachment,
+      tool_call: model.capabilities.toolcall,
+      modalities: {
+        input: Object.entries(model.capabilities.input)
+          .filter(([_, val]) => val)
+          .map(([key]) => key),
+        output: Object.entries(model.capabilities.output)
+          .filter(([_, val]) => val)
+          .map(([key]) => key),
+      },
+      limit: {
+        context: model.limit.context,
+        input: model.limit.input,
+        output: model.limit.output,
+      },
+      options: model.options,
+      headers: model.headers,
+      variants: model.variants,
+      release_date: model.release_date,
+      cost: model.cost,
+    };
+  }
+
+  map["github-copilot"] = { ...entry, models: next };
+  const out = { ...cfg, provider: map };
+  await Bun.write(file, JSON.stringify(out, null, 2));
+}
