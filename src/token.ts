@@ -13,6 +13,10 @@ function key(oauth: string, domain: string) {
   return `${domain}:${oauth}`;
 }
 
+export function invalidate(oauth: string, domain: string) {
+  cache.delete(key(oauth, domain));
+}
+
 export async function exchange(
   oauth: string,
   domain: string,

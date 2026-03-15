@@ -1,6 +1,6 @@
 import type { Hooks, Plugin } from "@opencode-ai/plugin";
 import { load } from "./config.js";
-import { exchange } from "./token.js";
+import { exchange, invalidate } from "./token.js";
 import { sync, normalize, type Provider } from "./models.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import os from "node:os";
@@ -65,30 +65,40 @@ export const plugin: Plugin = async (input) => {
             const domain = auth.enterpriseUrl
               ? normalize(auth.enterpriseUrl)
               : "github.com";
-            const session = await exchange(auth.refresh, domain, VERSION);
 
-            const url =
-              request instanceof URL ? request.href : request.toString();
-            const { isVision, isAgent } = detect(url, init);
+            const doFetch = async () => {
+              const session = await exchange(auth.refresh, domain, VERSION);
 
-            const headers: Record<string, string> = {
-              "x-initiator": isAgent ? "agent" : "user",
-              ...(init?.headers as Record<string, string>),
-              "User-Agent": `opencode/${VERSION}`,
-              Authorization: `Bearer ${session.token}`,
-              "Openai-Intent": "conversation-edits",
-              "Copilot-Integration-Id": "vscode-chat",
-              "Editor-Version": "vscode/1.100.0",
-              "Editor-Plugin-Version": "copilot-chat/0.38.0",
-              "X-GitHub-Api-Version": "2025-10-01",
+              const url =
+                request instanceof URL ? request.href : request.toString();
+              const { isVision, isAgent } = detect(url, init);
+
+              const headers: Record<string, string> = {
+                "x-initiator": isAgent ? "agent" : "user",
+                ...(init?.headers as Record<string, string>),
+                "User-Agent": `opencode/${VERSION}`,
+                Authorization: `Bearer ${session.token}`,
+                "Openai-Intent": "conversation-edits",
+                "Copilot-Integration-Id": "vscode-chat",
+                "Editor-Version": "vscode/1.100.0",
+                "Editor-Plugin-Version": "copilot-chat/0.38.0",
+                "X-GitHub-Api-Version": "2025-10-01",
+              };
+
+              if (isVision) headers["Copilot-Vision-Request"] = "true";
+
+              delete headers["x-api-key"];
+              delete headers["authorization"];
+
+              return fetch(request, { ...init, headers });
             };
 
-            if (isVision) headers["Copilot-Vision-Request"] = "true";
-
-            delete headers["x-api-key"];
-            delete headers["authorization"];
-
-            return fetch(request, { ...init, headers });
+            const res = await doFetch();
+            if (res.status === 401) {
+              invalidate(auth.refresh, domain);
+              return doFetch();
+            }
+            return res;
           },
         };
       },
