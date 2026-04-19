@@ -33,8 +33,14 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Upgrade npm (>=11.5.1 required for Trusted Publishing)
+        run: npm install -g npm@latest
+
       - name: Publish to npm (Trusted Publishing + provenance)
-        run: npm publish --provenance --access public
+        run: |
+          # Remove setup-node's auto-generated .npmrc so npm uses OIDC, not a placeholder token
+          rm -f "$NPM_CONFIG_USERCONFIG"
+          npm publish --provenance --access public
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
