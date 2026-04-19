@@ -1,5 +1,9 @@
 # opencode-copilot-enhanced
 
+[![npm version](https://img.shields.io/npm/v/opencode-copilot-enhanced.svg)](https://www.npmjs.com/package/opencode-copilot-enhanced)
+[![npm downloads](https://img.shields.io/npm/dm/opencode-copilot-enhanced.svg)](https://www.npmjs.com/package/opencode-copilot-enhanced)
+[![license](https://img.shields.io/npm/l/opencode-copilot-enhanced.svg)](./LICENSE)
+
 OpenCode plugin for enhanced GitHub Copilot support — dynamic model sync, proper token exchange, and configurable OAuth.
 
 ## What it does
@@ -12,7 +16,16 @@ OpenCode plugin for enhanced GitHub Copilot support — dynamic model sync, prop
 
 ## Install
 
-Add to your `opencode.json`:
+Install the package from npm:
+
+```bash
+npm install -g opencode-copilot-enhanced
+# or, per-project:
+npm install opencode-copilot-enhanced
+# bun / pnpm also work
+```
+
+Then add it to your `opencode.json`:
 
 ```json
 {
@@ -56,9 +69,20 @@ Because the built-in Copilot auth plugin always loads, you will see two "Login w
 
 ```bash
 bun install
-bun run typecheck
+bun test
 bun run build
 ```
+
+## Releasing
+
+Releases are automated via GitHub Actions. To cut a new release:
+
+```bash
+npm version patch   # or minor / major
+git push --follow-tags
+```
+
+The [publish workflow](./.github/workflows/publish.yml) builds, tests, publishes to npm with [provenance](https://docs.npmjs.com/generating-provenance-statements), and creates a GitHub Release with auto-generated notes.
 
 ## License
 
