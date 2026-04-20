@@ -26,6 +26,10 @@ function mockTokenResponse(
 // Save and restore the real fetch around each test.
 const realFetch = globalThis.fetch;
 
+function setFetchMock(fetchMock: ReturnType<typeof mock>) {
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+}
+
 beforeEach(() => {
   globalThis.fetch = realFetch;
 });
@@ -39,7 +43,7 @@ describe("exchange", () => {
     const fetchMock = mock(() =>
       Promise.resolve(mockTokenResponse("tok_abc", expiresAt)),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     const session = await exchange("oauth_1", domain, VERSION);
 
@@ -61,7 +65,7 @@ describe("exchange", () => {
         ),
       ),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     const session = await exchange("oauth_api", domain, VERSION);
 
@@ -75,7 +79,7 @@ describe("exchange", () => {
     const fetchMock = mock(() =>
       Promise.resolve(mockTokenResponse("tok_ghcom", expiresAt)),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     const session = await exchange("oauth_ghcom", "github.com", VERSION);
 
@@ -90,7 +94,7 @@ describe("exchange", () => {
     const fetchMock = mock(() =>
       Promise.resolve(mockTokenResponse("tok_cached", expiresAt)),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     const first = await exchange("oauth_2", domain, VERSION);
     const second = await exchange("oauth_2", domain, VERSION);
@@ -113,7 +117,7 @@ describe("exchange", () => {
         mockTokenResponse(`tok_margin_${callCount}`, expiresAt),
       );
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     const first = await exchange("oauth_3", domain, VERSION);
     expect(first.token).toBe("tok_margin_1");
@@ -138,7 +142,7 @@ describe("exchange", () => {
         mockTokenResponse(`tok_expired_${callCount}`, expiresAt),
       );
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     const first = await exchange("oauth_4", domain, VERSION);
     expect(first.token).toBe("tok_expired_1");
@@ -162,7 +166,7 @@ describe("exchange", () => {
           ),
         ),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     const [a, b, c] = await Promise.all([
       exchange("oauth_5", domain, VERSION),
@@ -185,7 +189,7 @@ describe("exchange", () => {
         }),
       ),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     await expect(exchange("oauth_6", domain, VERSION)).rejects.toThrow(
       "Copilot token exchange failed (401)",
@@ -202,7 +206,7 @@ describe("exchange", () => {
         }),
       ),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     await expect(exchange("oauth_7", domain, VERSION)).rejects.toThrow(
       "Copilot token exchange returned no token",
@@ -224,7 +228,7 @@ describe("invalidate", () => {
         mockTokenResponse(`tok_inv_${callCount}`, expiresAt),
       );
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    setFetchMock(fetchMock);
 
     const first = await exchange("oauth_8", domain, VERSION);
     expect(first.token).toBe("tok_inv_1");

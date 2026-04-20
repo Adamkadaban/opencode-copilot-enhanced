@@ -74,7 +74,7 @@ export type Model = {
   status: "alpha" | "beta" | "deprecated" | "active";
   options: Record<string, unknown>;
   headers: Record<string, string>;
-  release_date: string;
+  release_date?: string;
   variants?: Record<string, Record<string, unknown>>;
 };
 

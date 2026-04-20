@@ -8,6 +8,7 @@ import path from "node:path";
 
 const VERSION = "1.0.0";
 const POLL_MARGIN = 3000; // 3 s safety buffer for OAuth polling
+const RETRY_DELAY = 250;
 
 function urls(domain: string) {
   return {
@@ -15,6 +16,25 @@ function urls(domain: string) {
     token: `https://${domain}/login/oauth/access_token`,
   };
 }
+
+type AuthInfo = {
+  type?: string;
+  refresh?: string;
+  enterpriseUrl?: string;
+};
+
+type FetchLike = (
+  request: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+type CopilotFetchDeps = {
+  exchangeSession?: typeof exchange;
+  invalidateSession?: typeof invalidate;
+  fetchImpl?: FetchLike;
+  sleepImpl?: (ms: number) => Promise<unknown>;
+  logger?: Pick<Console, "warn">;
+};
 
 export const plugin: Plugin = async (input) => {
   const cfg = load();
@@ -43,7 +63,7 @@ export const plugin: Plugin = async (input) => {
               console.error("[opencode-copilot-enhanced] sync failed:", err);
             });
 
-          await writeModels(provider.models).catch((err) => {
+          await writeModels(provider.models as Provider["models"]).catch((err) => {
             console.error(
               "[opencode-copilot-enhanced] config update failed:",
               err,
@@ -58,47 +78,8 @@ export const plugin: Plugin = async (input) => {
         return {
           baseURL,
           apiKey: "",
-          async fetch(request: RequestInfo | URL, init?: RequestInit) {
-            const auth = await getAuth();
-            if (auth.type !== "oauth") return fetch(request, init);
-
-            const domain = auth.enterpriseUrl
-              ? normalize(auth.enterpriseUrl)
-              : "github.com";
-
-            const doFetch = async () => {
-              const session = await exchange(auth.refresh, domain, VERSION);
-
-              const url =
-                request instanceof URL ? request.href : request.toString();
-              const { isVision, isAgent } = detect(url, init);
-
-              const headers: Record<string, string> = {
-                "x-initiator": isAgent ? "agent" : "user",
-                ...(init?.headers as Record<string, string>),
-                "User-Agent": `opencode/${VERSION}`,
-                Authorization: `Bearer ${session.token}`,
-                "Openai-Intent": "conversation-edits",
-                "Copilot-Integration-Id": "vscode-chat",
-                "Editor-Version": "vscode/1.100.0",
-                "Editor-Plugin-Version": "copilot-chat/0.38.0",
-                "X-GitHub-Api-Version": "2025-10-01",
-              };
-
-              if (isVision) headers["Copilot-Vision-Request"] = "true";
-
-              delete headers["x-api-key"];
-              delete headers["authorization"];
-
-              return fetch(request, { ...init, headers });
-            };
-
-            const res = await doFetch();
-            if (res.status === 401) {
-              invalidate(auth.refresh, domain);
-              return doFetch();
-            }
-            return res;
+          fetch(request: RequestInfo | URL, init?: RequestInit) {
+            return fetchWithCopilotAuth(getAuth, request, init, VERSION);
           },
         };
       },
@@ -298,6 +279,94 @@ export const plugin: Plugin = async (input) => {
 };
 
 // --- request body inspection for vision / agent detection ---
+
+function requestURL(request: RequestInfo | URL) {
+  if (request instanceof URL) return request.href;
+  if (typeof request === "string") return request;
+  if (request instanceof Request) return request.url;
+  return String(request);
+}
+
+function shouldRetry499(url: string, response: Response) {
+  if (response.status !== 499) return false;
+  const contentType = response.headers.get("content-type") ?? "";
+  return url.includes("/chat/completions") || contentType.includes("text/event-stream");
+}
+
+function retryLogContext(url: string, response: Response) {
+  return {
+    status: response.status,
+    url,
+    contentType: response.headers.get("content-type") ?? undefined,
+    githubRequestID: response.headers.get("x-github-request-id") ?? undefined,
+    requestID: response.headers.get("x-request-id") ?? undefined,
+    copilotSession: response.headers.get("copilot-edits-session") ?? undefined,
+  };
+}
+
+export async function fetchWithCopilotAuth(
+  getAuth: () => Promise<AuthInfo | undefined>,
+  request: RequestInfo | URL,
+  init: RequestInit | undefined,
+  version: string,
+  deps: CopilotFetchDeps = {},
+) {
+  const exchangeSession = deps.exchangeSession ?? exchange;
+  const invalidateSession = deps.invalidateSession ?? invalidate;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const sleepImpl = deps.sleepImpl ?? sleep;
+  const logger = deps.logger ?? console;
+
+  const auth = await getAuth();
+  if (!auth || auth.type !== "oauth" || typeof auth.refresh !== "string") {
+    return fetchImpl(request, init);
+  }
+
+  const domain = auth.enterpriseUrl ? normalize(auth.enterpriseUrl) : "github.com";
+  const url = requestURL(request);
+
+  const doFetch = async () => {
+    const session = await exchangeSession(auth.refresh!, domain, version);
+    const { isVision, isAgent } = detect(url, init);
+
+    const headers: Record<string, string> = {
+      "x-initiator": isAgent ? "agent" : "user",
+      ...(init?.headers as Record<string, string>),
+      "User-Agent": `opencode/${version}`,
+      Authorization: `Bearer ${session.token}`,
+      "Openai-Intent": "conversation-edits",
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Version": "vscode/1.100.0",
+      "Editor-Plugin-Version": "copilot-chat/0.38.0",
+      "X-GitHub-Api-Version": "2025-10-01",
+    };
+
+    if (isVision) headers["Copilot-Vision-Request"] = "true";
+
+    delete headers["x-api-key"];
+    delete headers["authorization"];
+
+    return fetchImpl(request, { ...init, headers });
+  };
+
+  const res = await doFetch();
+  if (res.status === 401) {
+    invalidateSession(auth.refresh, domain);
+    return doFetch();
+  }
+
+  if (shouldRetry499(url, res)) {
+    logger.warn(
+      "[opencode-copilot-enhanced] retrying Copilot request after 499",
+      retryLogContext(url, res),
+    );
+    invalidateSession(auth.refresh, domain);
+    await sleepImpl(RETRY_DELAY);
+    return doFetch();
+  }
+
+  return res;
+}
 
 function detect(url: string, init?: RequestInit) {
   try {
