@@ -3,8 +3,6 @@ import { load } from "./config.js";
 import { exchange, invalidate } from "./token.js";
 import { sync, normalize, type Provider } from "./models.js";
 import { setTimeout as sleep } from "node:timers/promises";
-import os from "node:os";
-import path from "node:path";
 
 const VERSION = "1.0.0";
 const POLL_MARGIN = 3000; // 3 s safety buffer for OAuth polling
@@ -36,6 +34,35 @@ type CopilotFetchDeps = {
   logger?: Pick<Console, "warn">;
 };
 
+type ProviderModelsHook = {
+  id: string;
+  models?: (
+    provider: Provider,
+    ctx: { auth?: AuthInfo },
+  ) => Promise<Provider["models"]>;
+};
+
+type HooksWithProvider = Hooks & {
+  provider?: ProviderModelsHook;
+};
+
+async function syncProviderModels(info: { refresh: string; enterpriseUrl?: string }, provider: Provider) {
+  const copy = {
+    id: provider.id,
+    models: structuredClone(provider.models) as Provider["models"],
+  } satisfies Provider;
+
+  const api = await sync(info, copy, VERSION);
+
+  for (const model of Object.values(copy.models)) {
+    model.cost = { input: 0, output: 0, cache: { read: 0, write: 0 } };
+    model.api.npm = "@ai-sdk/github-copilot";
+  }
+
+  provider.models = copy.models;
+  return api;
+}
+
 export const plugin: Plugin = async (input) => {
   const cfg = load();
   const sdk = input.client;
@@ -44,7 +71,7 @@ export const plugin: Plugin = async (input) => {
     auth: {
       provider: "github-copilot",
 
-      // --- loader: sync models, return custom fetch ---
+      // --- loader: return custom fetch + options only ---
       async loader(getAuth, provider) {
         const info = await getAuth();
         if (!info || info.type !== "oauth") return {};
@@ -54,24 +81,15 @@ export const plugin: Plugin = async (input) => {
           ? `https://copilot-api.${normalize(enterprise)}`
           : undefined;
 
-        if (provider?.models) {
-          await sync(info, provider as unknown as Provider, VERSION)
-            .then((api) => {
-              baseURL = api;
-            })
-            .catch((err) => {
-              console.error("[opencode-copilot-enhanced] sync failed:", err);
-            });
-
-          await writeModels(provider.models as Provider["models"]).catch((err) => {
-            console.error(
-              "[opencode-copilot-enhanced] config update failed:",
-              err,
+        if (typeof info.refresh === "string") {
+          try {
+            const api = await syncProviderModels(
+              { refresh: info.refresh, enterpriseUrl: info.enterpriseUrl },
+              provider as unknown as Provider,
             );
-          });
-          for (const model of Object.values(provider.models)) {
-            model.cost = { input: 0, output: 0, cache: { read: 0, write: 0 } };
-            model.api.npm = "@ai-sdk/github-copilot";
+            baseURL = api || baseURL;
+          } catch (err) {
+            console.error("[opencode-copilot-enhanced] loader sync failed:", err);
           }
         }
 
@@ -239,6 +257,32 @@ export const plugin: Plugin = async (input) => {
       ],
     },
 
+    provider: {
+      id: "github-copilot",
+      models: async (provider, ctx) => {
+        const auth = ctx.auth;
+        if (!auth || auth.type !== "oauth" || typeof auth.refresh !== "string") {
+          return provider.models;
+        }
+
+        const info = {
+          refresh: auth.refresh,
+          enterpriseUrl:
+            "enterpriseUrl" in auth && typeof auth.enterpriseUrl === "string"
+              ? auth.enterpriseUrl
+              : undefined,
+        };
+
+        try {
+          await syncProviderModels(info, provider);
+          return provider.models;
+        } catch (err) {
+          console.error("[opencode-copilot-enhanced] sync failed:", err);
+          return provider.models;
+        }
+      },
+    },
+
     // --- chat.headers: mark subagent & compacted sessions ---
     "chat.headers": async (incoming, output) => {
       if (!incoming.model.providerID.includes("github-copilot")) return;
@@ -275,7 +319,7 @@ export const plugin: Plugin = async (input) => {
         output.headers["x-initiator"] = "agent";
       }
     },
-  } satisfies Hooks;
+  } satisfies HooksWithProvider;
 };
 
 // --- request body inspection for vision / agent detection ---
@@ -431,53 +475,3 @@ const pluginModule: { id: string; server: Plugin } = {
 };
 
 export default pluginModule;
-
-async function writeModels(models: Provider["models"]) {
-  const file = path.join(os.homedir(), ".config", "opencode", "opencode.json");
-  const item = Bun.file(file);
-  const has = await item.exists();
-  const cfg = has
-    ? await item.json().catch(() => ({}))
-    : { $schema: "https://opencode.ai/config.json" };
-  const map = cfg.provider ?? {};
-  const entry = map["github-copilot"] ?? {};
-  const prev = entry.models ?? {};
-  const next: Record<string, any> = { ...prev };
-
-  for (const model of Object.values(models)) {
-    const status = ["alpha", "beta", "deprecated"].includes(model.status)
-      ? { status: model.status }
-      : {};
-    next[model.id] = {
-      id: model.id,
-      name: model.name,
-      family: model.family,
-      ...status,
-      reasoning: model.capabilities.reasoning,
-      attachment: model.capabilities.attachment,
-      tool_call: model.capabilities.toolcall,
-      modalities: {
-        input: Object.entries(model.capabilities.input)
-          .filter(([_, val]) => val)
-          .map(([key]) => key),
-        output: Object.entries(model.capabilities.output)
-          .filter(([_, val]) => val)
-          .map(([key]) => key),
-      },
-      limit: {
-        context: model.limit.context,
-        input: model.limit.input,
-        output: model.limit.output,
-      },
-      options: model.options,
-      headers: model.headers,
-      variants: model.variants,
-      release_date: model.release_date,
-      cost: model.cost,
-    };
-  }
-
-  map["github-copilot"] = { ...entry, models: next };
-  const out = { ...cfg, provider: map };
-  await Bun.write(file, JSON.stringify(out, null, 2));
-}

@@ -3,15 +3,20 @@ import { exchange } from "./token.js";
 export type LiveModel = {
   id: string;
   name?: string;
+  version?: string;
   vendor?: string;
   preview?: boolean;
   model_picker_enabled?: boolean;
+  policy?: {
+    state?: string;
+  };
   supported_endpoints?: string[];
   modalities?: {
     input?: string[];
     output?: string[];
   };
   capabilities?: {
+    family?: string;
     limits?: {
       context?: number;
       context_window?: number;
@@ -24,7 +29,14 @@ export type LiveModel = {
       output?: number;
     };
     supports?: {
+      adaptive_thinking?: boolean;
+      max_thinking_budget?: number;
+      min_thinking_budget?: number;
       reasoning_effort?: string[];
+      streaming?: boolean;
+      structured_outputs?: boolean;
+      tool_calls?: boolean;
+      vision?: boolean;
     };
   };
 };
@@ -108,6 +120,84 @@ function family(id: string, vendor?: string) {
   return vendor?.toLowerCase() ?? "";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toModel(value: unknown): LiveModel | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.id !== "string" || value.id.length === 0) return undefined;
+
+  const capabilities = isRecord(value.capabilities) ? value.capabilities : undefined;
+  const limits = capabilities && isRecord(capabilities.limits) ? capabilities.limits : undefined;
+  const supports = capabilities && isRecord(capabilities.supports) ? capabilities.supports : undefined;
+  const modalities = isRecord(value.modalities) ? value.modalities : undefined;
+  const policy = isRecord(value.policy) ? value.policy : undefined;
+
+  return {
+    id: value.id,
+    name: typeof value.name === "string" ? value.name : undefined,
+    version: typeof value.version === "string" ? value.version : undefined,
+    vendor: typeof value.vendor === "string" ? value.vendor : undefined,
+    preview: typeof value.preview === "boolean" ? value.preview : undefined,
+    model_picker_enabled:
+      typeof value.model_picker_enabled === "boolean" ? value.model_picker_enabled : undefined,
+    supported_endpoints: words(value.supported_endpoints),
+    policy: policy
+      ? {
+          state: typeof policy.state === "string" ? policy.state : undefined,
+        }
+      : undefined,
+    modalities: modalities
+      ? {
+          input: words(modalities.input),
+          output: words(modalities.output),
+        }
+      : undefined,
+    capabilities: capabilities
+      ? {
+          family: typeof capabilities.family === "string" ? capabilities.family : undefined,
+          limits: limits
+            ? {
+                context: typeof limits.context === "number" ? limits.context : undefined,
+                context_window: typeof limits.context_window === "number" ? limits.context_window : undefined,
+                context_window_tokens:
+                  typeof limits.context_window_tokens === "number" ? limits.context_window_tokens : undefined,
+                input: typeof limits.input === "number" ? limits.input : undefined,
+                max_context_window_tokens:
+                  typeof limits.max_context_window_tokens === "number"
+                    ? limits.max_context_window_tokens
+                    : undefined,
+                max_input_tokens:
+                  typeof limits.max_input_tokens === "number" ? limits.max_input_tokens : undefined,
+                max_output_tokens:
+                  typeof limits.max_output_tokens === "number" ? limits.max_output_tokens : undefined,
+                max_prompt_tokens:
+                  typeof limits.max_prompt_tokens === "number" ? limits.max_prompt_tokens : undefined,
+                output: typeof limits.output === "number" ? limits.output : undefined,
+              }
+            : undefined,
+          supports: supports
+            ? {
+                adaptive_thinking:
+                  typeof supports.adaptive_thinking === "boolean" ? supports.adaptive_thinking : undefined,
+                max_thinking_budget:
+                  typeof supports.max_thinking_budget === "number" ? supports.max_thinking_budget : undefined,
+                min_thinking_budget:
+                  typeof supports.min_thinking_budget === "number" ? supports.min_thinking_budget : undefined,
+                reasoning_effort: words(supports.reasoning_effort),
+                streaming: typeof supports.streaming === "boolean" ? supports.streaming : undefined,
+                structured_outputs:
+                  typeof supports.structured_outputs === "boolean" ? supports.structured_outputs : undefined,
+                tool_calls: typeof supports.tool_calls === "boolean" ? supports.tool_calls : undefined,
+                vision: typeof supports.vision === "boolean" ? supports.vision : undefined,
+              }
+            : undefined,
+        }
+      : undefined,
+  };
+}
+
 function limits(input: LiveModel, prev?: Model) {
   const caps = input.capabilities?.limits;
   const output = num(
@@ -142,6 +232,13 @@ function efforts(input: LiveModel, prev?: Model) {
   return words(prev?.options.reasoningEfforts);
 }
 
+function releaseDate(input: LiveModel, prev?: Model) {
+  if (prev?.release_date) return prev.release_date;
+  if (!input.version) return "";
+  const prefix = `${input.id}-`;
+  return input.version.startsWith(prefix) ? input.version.slice(prefix.length) : input.version;
+}
+
 function supported(input: LiveModel) {
   if (input.model_picker_enabled === false) return false;
   const endpoints = input.supported_endpoints ?? [];
@@ -174,11 +271,14 @@ function build(
       temperature: prev?.capabilities.temperature ?? false,
       reasoning:
         prev?.capabilities.reasoning ??
-        (list.length > 0 ||
-          /(claude|gpt-5|gemini|grok|kimi|glm|o1|o3|o4)/.test(text)),
+        (input.capabilities?.supports?.adaptive_thinking === true ||
+          typeof input.capabilities?.supports?.max_thinking_budget === "number" ||
+          typeof input.capabilities?.supports?.min_thinking_budget === "number" ||
+          list.length > 0),
       attachment:
-        prev?.capabilities.attachment ?? inMods.some((m) => m !== "text"),
-      toolcall: prev?.capabilities.toolcall ?? true,
+        prev?.capabilities.attachment ??
+        (input.capabilities?.supports?.vision === true || inMods.some((m) => m !== "text")),
+      toolcall: prev?.capabilities.toolcall ?? input.capabilities?.supports?.tool_calls ?? true,
       input: {
         text: true,
         audio: prev?.capabilities.input.audio ?? inMods.includes("audio"),
@@ -203,7 +303,7 @@ function build(
       ...(list.length > 0 ? { reasoningEfforts: list } : {}),
     },
     headers: prev?.headers ?? {},
-    release_date: prev?.release_date ?? "",
+    release_date: releaseDate(input, prev),
     variants: prev?.variants ?? {},
   };
 }
@@ -232,11 +332,12 @@ export async function list(oauth: string, domain: string, version: string) {
     throw new Error(`Copilot model listing failed (${res.status}): ${text}`);
   }
 
-  const body = (await res.json()) as { data?: LiveModel[] } | LiveModel[];
-  const data = Array.isArray(body) ? body : body.data;
+  const body = (await res.json()) as { data?: unknown[] } | unknown[];
+  const raw = Array.isArray(body) ? body : body.data;
+  const data = (raw ?? []).map(toModel).filter((item): item is LiveModel => Boolean(item));
   return {
     api: session.api,
-    data: (data ?? []).filter(supported),
+    data: data.filter((item) => item.policy?.state !== "disabled").filter(supported),
   };
 }
 
