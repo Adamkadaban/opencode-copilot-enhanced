@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import pluginModule, { fetchWithCopilotAuth, plugin } from "./index.js";
+import pluginModule, {
+  applyLiveVariantOverrides,
+  fetchWithCopilotAuth,
+  plugin,
+} from "./index.js";
 import { list, sync, type Provider } from "./models.js";
 
 const VERSION = "1.0.0";
@@ -152,6 +156,49 @@ describe("fetchWithCopilotAuth", () => {
 });
 
 describe("model syncing", () => {
+  test("applies live reasoning variants as config overrides", () => {
+    const config = {};
+    const provider: Provider = {
+      id: "github-copilot",
+      models: {
+        "claude-opus-4.7": {
+          id: "claude-opus-4.7",
+          providerID: "github-copilot",
+          api: {
+            id: "claude-opus-4.7",
+            url: "https://api.enterprise.githubcopilot.com",
+            npm: "@ai-sdk/github-copilot",
+          },
+          name: "Claude Opus 4.7",
+          family: "claude",
+          capabilities: {
+            temperature: false,
+            reasoning: true,
+            attachment: true,
+            toolcall: true,
+            input: { text: true, audio: false, image: false, video: false, pdf: false },
+            output: { text: true, audio: false, image: false, video: false, pdf: false },
+            interleaved: false,
+          },
+          cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          limit: { context: 200000, output: 32000 },
+          status: "active",
+          options: { reasoningEfforts: ["medium"] },
+          headers: {},
+          release_date: "2026-02-05",
+          variants: {},
+        },
+      },
+    };
+
+    applyLiveVariantOverrides(config, provider);
+
+    const variants = (config as any).provider["github-copilot"].models["claude-opus-4.7"].variants;
+    expect(variants.medium).toEqual({ reasoningEffort: "medium" });
+    expect(variants.high).toEqual({ disabled: true });
+    expect(variants.low).toEqual({ disabled: true });
+  });
+
   test("salvages malformed Copilot model rows instead of failing the whole list", async () => {
     const fetchMock = mock(async (request: RequestInfo | URL) => {
       const url = String(request);

@@ -3,6 +3,8 @@ import { load } from "./config.js";
 import { exchange, invalidate } from "./token.js";
 import { sync, normalize, type Provider } from "./models.js";
 import { setTimeout as sleep } from "node:timers/promises";
+import os from "node:os";
+import path from "node:path";
 
 const VERSION = "1.0.0";
 const POLL_MARGIN = 3000; // 3 s safety buffer for OAuth polling
@@ -46,6 +48,79 @@ type HooksWithProvider = Hooks & {
   provider?: ProviderModelsHook;
 };
 
+type ConfigModelOverride = {
+  variants?: Record<string, Record<string, unknown>>;
+};
+
+type ConfigProviderOverride = {
+  models?: Record<string, ConfigModelOverride>;
+};
+
+type ConfigWithProviders = {
+  provider?: Record<string, ConfigProviderOverride>;
+};
+
+const COMMON_REASONING_VARIANTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+function strings(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function buildReasoningVariantOverrides(value: unknown) {
+  const supported = Array.from(new Set(strings(value)));
+  if (supported.length === 0) return;
+
+  const variants: Record<string, Record<string, unknown>> = {};
+  for (const effort of new Set([...COMMON_REASONING_VARIANTS, ...supported])) {
+    variants[effort] = supported.includes(effort)
+      ? { reasoningEffort: effort }
+      : { disabled: true };
+  }
+  return variants;
+}
+
+export function applyLiveVariantOverrides(config: ConfigWithProviders, provider: Provider) {
+  const providers = (config.provider ??= {});
+  const copilot = (providers["github-copilot"] ??= {});
+  const models = (copilot.models ??= {});
+
+  for (const model of Object.values(provider.models)) {
+    const variants = buildReasoningVariantOverrides(model.options.reasoningEfforts);
+    if (!variants) continue;
+
+    const entry = (models[model.id] ??= {});
+    entry.variants = {
+      ...(entry.variants ?? {}),
+      ...variants,
+    };
+  }
+}
+
+async function readStoredCopilotAuth(): Promise<AuthInfo | undefined> {
+  const file = Bun.file(
+    path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
+  );
+  if (!(await file.exists())) return;
+
+  const data = (await file.json().catch(() => undefined)) as
+    | Record<string, AuthInfo>
+    | undefined;
+  if (!data || typeof data !== "object") return;
+
+  const auth = data["github-copilot"] ?? data["github-copilot-enterprise"];
+  if (!auth || auth.type !== "oauth" || typeof auth.refresh !== "string") return;
+  return auth;
+}
+
 async function syncProviderModels(info: { refresh: string; enterpriseUrl?: string }, provider: Provider) {
   const copy = {
     id: provider.id,
@@ -68,6 +143,21 @@ export const plugin: Plugin = async (input) => {
   const sdk = input.client;
 
   return {
+    async config(config) {
+      const auth = await readStoredCopilotAuth();
+      if (!auth) return;
+
+      const provider: Provider = { id: "github-copilot", models: {} };
+      try {
+        await syncProviderModels(
+          { refresh: auth.refresh!, enterpriseUrl: auth.enterpriseUrl },
+          provider,
+        );
+        applyLiveVariantOverrides(config as ConfigWithProviders, provider);
+      } catch (err) {
+        console.error("[opencode-copilot-enhanced] config variant sync failed:", err);
+      }
+    },
     auth: {
       provider: "github-copilot",
 
