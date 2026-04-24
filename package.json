@@ -41,6 +41,9 @@
     "url": "https://github.com/Adamkadaban/opencode-copilot-enhanced/issues"
   },
   "homepage": "https://github.com/Adamkadaban/opencode-copilot-enhanced#readme",
+  "engines": {
+    "opencode": ">=1.14.22"
+  },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=0.15.0"
   },

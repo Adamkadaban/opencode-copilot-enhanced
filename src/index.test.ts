@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { fetchWithCopilotAuth } from "./index.js";
+import pluginModule, { fetchWithCopilotAuth, plugin } from "./index.js";
 
 const VERSION = "1.0.0";
 
@@ -16,6 +16,11 @@ beforeEach(() => {
 });
 
 describe("fetchWithCopilotAuth", () => {
+  test("exports a v1 plugin module for current OpenCode", () => {
+    expect(pluginModule.id).toBe("opencode-copilot-enhanced");
+    expect(pluginModule.server).toBe(plugin);
+  });
+
   test("retries one streamed 499 with a fresh token", async () => {
     let exchangeCount = 0;
     const exchangeSession = mock(async () => ({

@@ -425,7 +425,12 @@ function detect(url: string, init?: RequestInit) {
   return { isVision: false, isAgent: false };
 }
 
-export default plugin;
+const pluginModule: { id: string; server: Plugin } = {
+  id: "opencode-copilot-enhanced",
+  server: plugin,
+};
+
+export default pluginModule;
 
 async function writeModels(models: Provider["models"]) {
   const file = path.join(os.homedir(), ".config", "opencode", "opencode.json");
