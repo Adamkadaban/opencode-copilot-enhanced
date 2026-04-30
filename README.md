@@ -16,13 +16,16 @@ OpenCode plugin for enhanced GitHub Copilot support — dynamic model sync, prop
 
 ## Install
 
-Install the package from npm:
+```bash
+opencode plugin opencode-copilot-enhanced
+```
+
+This installs the package globally and updates your `opencode.json` automatically.
+
+Or manually:
 
 ```bash
 npm install -g opencode-copilot-enhanced
-# or, per-project:
-npm install opencode-copilot-enhanced
-# bun / pnpm also work
 ```
 
 Then add it to your `opencode.json`:
