@@ -34,7 +34,6 @@ describe("fetchWithCopilotAuth", () => {
     }));
     const invalidateSession = mock(() => {});
     const sleepImpl = mock(async () => {});
-    const logger = { warn: mock(() => {}) };
 
     let fetchCount = 0;
     const fetchImpl = mock(async (_request: RequestInfo | URL, init?: RequestInit) => {
@@ -73,7 +72,6 @@ describe("fetchWithCopilotAuth", () => {
         invalidateSession,
         fetchImpl,
         sleepImpl,
-        logger,
       },
     );
 
@@ -86,7 +84,6 @@ describe("fetchWithCopilotAuth", () => {
       "enterprise.githubcopilot.com",
     );
     expect(sleepImpl).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   test("preserves existing 401 retry behavior", async () => {
@@ -128,7 +125,6 @@ describe("fetchWithCopilotAuth", () => {
     const exchangeSession = mock(async () => session);
     const invalidateSession = mock(() => {});
     const sleepImpl = mock(async () => {});
-    const logger = { warn: mock(() => {}) };
     const fetchImpl = mock(
       async () => new Response("", { status: 499, headers: { "content-type": "application/json" } }),
     );
@@ -143,7 +139,6 @@ describe("fetchWithCopilotAuth", () => {
         invalidateSession,
         fetchImpl,
         sleepImpl,
-        logger,
       },
     );
 
@@ -151,7 +146,6 @@ describe("fetchWithCopilotAuth", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(invalidateSession).not.toHaveBeenCalled();
     expect(sleepImpl).not.toHaveBeenCalled();
-    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 

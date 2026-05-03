@@ -33,7 +33,6 @@ type CopilotFetchDeps = {
   invalidateSession?: typeof invalidate;
   fetchImpl?: FetchLike;
   sleepImpl?: (ms: number) => Promise<unknown>;
-  logger?: Pick<Console, "warn">;
 };
 
 type ProviderModelsHook = {
@@ -154,8 +153,8 @@ export const plugin: Plugin = async (input) => {
           provider,
         );
         applyLiveVariantOverrides(config as ConfigWithProviders, provider);
-      } catch (err) {
-        console.error("[opencode-copilot-enhanced] config variant sync failed:", err);
+      } catch (_) {
+        // silently ignore – logging to console corrupts the TUI
       }
     },
     auth: {
@@ -178,8 +177,8 @@ export const plugin: Plugin = async (input) => {
               provider as unknown as Provider,
             );
             baseURL = api || baseURL;
-          } catch (err) {
-            console.error("[opencode-copilot-enhanced] loader sync failed:", err);
+          } catch (_) {
+            // silently ignore – logging to console corrupts the TUI
           }
         }
 
@@ -366,8 +365,8 @@ export const plugin: Plugin = async (input) => {
         try {
           await syncProviderModels(info, provider);
           return provider.models;
-        } catch (err) {
-          console.error("[opencode-copilot-enhanced] sync failed:", err);
+        } catch (_) {
+          // silently ignore – logging to console corrupts the TUI
           return provider.models;
         }
       },
@@ -427,17 +426,6 @@ function shouldRetry499(url: string, response: Response) {
   return url.includes("/chat/completions") || contentType.includes("text/event-stream");
 }
 
-function retryLogContext(url: string, response: Response) {
-  return {
-    status: response.status,
-    url,
-    contentType: response.headers.get("content-type") ?? undefined,
-    githubRequestID: response.headers.get("x-github-request-id") ?? undefined,
-    requestID: response.headers.get("x-request-id") ?? undefined,
-    copilotSession: response.headers.get("copilot-edits-session") ?? undefined,
-  };
-}
-
 export async function fetchWithCopilotAuth(
   getAuth: () => Promise<AuthInfo | undefined>,
   request: RequestInfo | URL,
@@ -449,7 +437,6 @@ export async function fetchWithCopilotAuth(
   const invalidateSession = deps.invalidateSession ?? invalidate;
   const fetchImpl = deps.fetchImpl ?? fetch;
   const sleepImpl = deps.sleepImpl ?? sleep;
-  const logger = deps.logger ?? console;
 
   const auth = await getAuth();
   if (!auth || auth.type !== "oauth" || typeof auth.refresh !== "string") {
@@ -490,10 +477,6 @@ export async function fetchWithCopilotAuth(
   }
 
   if (shouldRetry499(url, res)) {
-    logger.warn(
-      "[opencode-copilot-enhanced] retrying Copilot request after 499",
-      retryLogContext(url, res),
-    );
     invalidateSession(auth.refresh, domain);
     await sleepImpl(RETRY_DELAY);
     return doFetch();
