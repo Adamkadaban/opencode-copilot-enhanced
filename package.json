@@ -1,6 +1,6 @@
 {
   "name": "opencode-copilot-enhanced",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "OpenCode plugin for enhanced GitHub Copilot support — dynamic model sync, proper token exchange, and configurable OAuth",
   "type": "module",
   "main": "./dist/index.js",
