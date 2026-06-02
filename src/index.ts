@@ -426,6 +426,32 @@ function shouldRetry499(url: string, response: Response) {
   return url.includes("/chat/completions") || contentType.includes("text/event-stream");
 }
 
+/** Fields the Copilot proxy does not support. */
+const UNSUPPORTED_BODY_FIELDS = ["service_tier"];
+
+/**
+ * Strip fields from the JSON request body that the Copilot API proxy rejects.
+ * Models.dev injects `service_tier` for "-fast" variants, but the Copilot
+ * proxy doesn't forward it and returns an error instead.
+ */
+function stripUnsupportedBody(body: RequestInit["body"]): RequestInit["body"] {
+  if (typeof body !== "string") return body;
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed !== "object" || parsed === null) return body;
+    let changed = false;
+    for (const field of UNSUPPORTED_BODY_FIELDS) {
+      if (field in parsed) {
+        delete parsed[field];
+        changed = true;
+      }
+    }
+    return changed ? JSON.stringify(parsed) : body;
+  } catch {
+    return body;
+  }
+}
+
 export async function fetchWithCopilotAuth(
   getAuth: () => Promise<AuthInfo | undefined>,
   request: RequestInfo | URL,
@@ -467,7 +493,7 @@ export async function fetchWithCopilotAuth(
     delete headers["x-api-key"];
     delete headers["authorization"];
 
-    return fetchImpl(request, { ...init, headers });
+    return fetchImpl(request, { ...init, headers, body: stripUnsupportedBody(init?.body) });
   };
 
   const res = await doFetch();

@@ -147,6 +147,43 @@ describe("fetchWithCopilotAuth", () => {
     expect(invalidateSession).not.toHaveBeenCalled();
     expect(sleepImpl).not.toHaveBeenCalled();
   });
+
+  test("strips service_tier from request body before sending to Copilot", async () => {
+    const exchangeSession = mock(async () => session);
+    const invalidateSession = mock(() => {});
+    const sleepImpl = mock(async () => {});
+
+    let sentBody: string | undefined;
+    const fetchImpl = mock(async (_request: RequestInfo | URL, init?: RequestInit) => {
+      sentBody = typeof init?.body === "string" ? init.body : undefined;
+      return new Response("ok", { status: 200 });
+    });
+
+    await fetchWithCopilotAuth(
+      async () => ({ type: "oauth", refresh: "oauth_token" }),
+      "https://api.githubcopilot.com/chat/completions",
+      {
+        body: JSON.stringify({
+          model: "gpt-5.5",
+          messages: [{ role: "user", content: "hi" }],
+          service_tier: "priority",
+        }),
+      },
+      VERSION,
+      {
+        exchangeSession,
+        invalidateSession,
+        fetchImpl,
+        sleepImpl,
+      },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(sentBody!);
+    expect(parsed.service_tier).toBeUndefined();
+    expect(parsed.model).toBe("gpt-5.5");
+    expect(parsed.messages).toHaveLength(1);
+  });
 });
 
 describe("model syncing", () => {
