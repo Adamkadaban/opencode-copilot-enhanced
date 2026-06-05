@@ -1,4 +1,5 @@
 const MARGIN = 5 * 60 * 1000; // refresh 5 min before expiry (matches VS Code)
+const TOKEN_EXCHANGE_TIMEOUT_MS = 10_000;
 
 export type Session = {
   token: string;
@@ -33,6 +34,7 @@ export async function exchange(
     try {
       const url = `https://api.${domain}/copilot_internal/v2/token`;
       const res = await fetch(url, {
+        signal: AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS),
         headers: {
           Authorization: `token ${oauth}`,
           Accept: "application/json",

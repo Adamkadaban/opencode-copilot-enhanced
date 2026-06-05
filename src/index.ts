@@ -3,8 +3,6 @@ import { load } from "./config.js";
 import { exchange, invalidate } from "./token.js";
 import { sync, normalize, type Provider } from "./models.js";
 import { setTimeout as sleep } from "node:timers/promises";
-import os from "node:os";
-import path from "node:path";
 
 const VERSION = "1.0.0";
 const POLL_MARGIN = 3000; // 3 s safety buffer for OAuth polling
@@ -69,6 +67,13 @@ const COMMON_REASONING_VARIANTS = [
   "max",
 ];
 
+type SyncedModels = {
+  api?: string;
+  models: Provider["models"];
+};
+
+const syncInflight = new Map<string, Promise<SyncedModels>>();
+
 function strings(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
@@ -104,22 +109,6 @@ export function applyLiveVariantOverrides(config: ConfigWithProviders, provider:
   }
 }
 
-async function readStoredCopilotAuth(): Promise<AuthInfo | undefined> {
-  const file = Bun.file(
-    path.join(os.homedir(), ".local", "share", "opencode", "auth.json"),
-  );
-  if (!(await file.exists())) return;
-
-  const data = (await file.json().catch(() => undefined)) as
-    | Record<string, AuthInfo>
-    | undefined;
-  if (!data || typeof data !== "object") return;
-
-  const auth = data["github-copilot"] ?? data["github-copilot-enterprise"];
-  if (!auth || auth.type !== "oauth" || typeof auth.refresh !== "string") return;
-  return auth;
-}
-
 async function syncProviderModels(info: { refresh: string; enterpriseUrl?: string }, provider: Provider) {
   const copy = {
     id: provider.id,
@@ -131,38 +120,41 @@ async function syncProviderModels(info: { refresh: string; enterpriseUrl?: strin
   for (const model of Object.values(copy.models)) {
     model.cost = { input: 0, output: 0, cache: { read: 0, write: 0 } };
     model.api.npm = "@ai-sdk/github-copilot";
+    const variants = buildReasoningVariantOverrides(model.options.reasoningEfforts);
+    if (variants) {
+      model.variants = {
+        ...(model.variants ?? {}),
+        ...variants,
+      };
+    }
   }
 
-  // Register the "auto" model — Copilot auto-routes to the cheapest adequate
-  // model when the model field is omitted from /chat/completions requests.
-  // Users get a 10% discount on model costs when using auto selection.
-  const autoUrl = api || Object.values(copy.models)[0]?.api.url || "https://api.githubcopilot.com";
-  copy.models["auto"] = {
-    id: "auto",
-    providerID: provider.id,
-    api: { id: "auto", url: autoUrl, npm: "@ai-sdk/github-copilot" },
-    name: "Auto (cheapest model for task)",
-    family: "gpt",
-    capabilities: {
-      temperature: false,
-      reasoning: false,
-      attachment: true,
-      toolcall: true,
-      input: { text: true, audio: false, image: true, video: false, pdf: false },
-      output: { text: true, audio: false, image: false, video: false, pdf: false },
-      interleaved: false,
-    },
-    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
-    limit: { context: 128000, output: 16384 },
-    status: "active",
-    options: {},
-    headers: {},
-    release_date: "",
-    variants: {},
-  };
-
   provider.models = copy.models;
-  return api;
+  return {
+    api,
+    models: copy.models,
+  } satisfies SyncedModels;
+}
+
+function syncKey(info: { refresh: string; enterpriseUrl?: string }) {
+  return `${info.enterpriseUrl ?? "github.com"}:${info.refresh}`;
+}
+
+function syncProviderModelsOnce(info: { refresh: string; enterpriseUrl?: string }, provider: Provider) {
+  const key = syncKey(info);
+  const running = syncInflight.get(key);
+  if (running) {
+    return running.then((result) => {
+      provider.models = structuredClone(result.models) as Provider["models"];
+      return result;
+    });
+  }
+
+  const job = syncProviderModels(info, provider).finally(() => {
+    syncInflight.delete(key);
+  });
+  syncInflight.set(key, job);
+  return job;
 }
 
 export const plugin: Plugin = async (input) => {
@@ -170,21 +162,6 @@ export const plugin: Plugin = async (input) => {
   const sdk = input.client;
 
   return {
-    async config(config) {
-      const auth = await readStoredCopilotAuth();
-      if (!auth) return;
-
-      const provider: Provider = { id: "github-copilot", models: {} };
-      try {
-        await syncProviderModels(
-          { refresh: auth.refresh!, enterpriseUrl: auth.enterpriseUrl },
-          provider,
-        );
-        applyLiveVariantOverrides(config as ConfigWithProviders, provider);
-      } catch (_) {
-        // silently ignore – logging to console corrupts the TUI
-      }
-    },
     auth: {
       provider: "github-copilot",
 
@@ -200,11 +177,11 @@ export const plugin: Plugin = async (input) => {
 
         if (typeof info.refresh === "string") {
           try {
-            const api = await syncProviderModels(
+            const result = await syncProviderModelsOnce(
               { refresh: info.refresh, enterpriseUrl: info.enterpriseUrl },
               provider as unknown as Provider,
             );
-            baseURL = api || baseURL;
+            baseURL = result.api || baseURL;
           } catch (_) {
             // silently ignore – logging to console corrupts the TUI
           }
@@ -391,7 +368,7 @@ export const plugin: Plugin = async (input) => {
         };
 
         try {
-          await syncProviderModels(info, provider);
+          await syncProviderModelsOnce(info, provider);
           return provider.models;
         } catch (_) {
           // silently ignore – logging to console corrupts the TUI
@@ -462,8 +439,6 @@ const UNSUPPORTED_BODY_FIELDS = ["service_tier"];
  *
  * - `service_tier`: models.dev injects this for "-fast" variants but the
  *   Copilot proxy doesn't support it.
- * - `model` when set to `"auto"`: Copilot auto-routes to the cheapest
- *   adequate model when the field is omitted from /chat/completions requests.
  */
 function stripUnsupportedBody(body: RequestInit["body"]): RequestInit["body"] {
   if (typeof body !== "string") return body;
@@ -476,10 +451,6 @@ function stripUnsupportedBody(body: RequestInit["body"]): RequestInit["body"] {
         delete parsed[field];
         changed = true;
       }
-    }
-    if (parsed.model === "auto") {
-      delete parsed.model;
-      changed = true;
     }
     return changed ? JSON.stringify(parsed) : body;
   } catch {

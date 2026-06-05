@@ -1,4 +1,12 @@
 import { exchange } from "./token.js";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+const MODEL_LIST_TIMEOUT_MS = 10_000;
+const MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const MODEL_CACHE_VERSION = 1;
 
 export type LiveModel = {
   id: string;
@@ -94,6 +102,32 @@ export type Provider = {
   id: string;
   models: Record<string, Model>;
 };
+
+export type ModelListOptions = {
+  cacheDir?: string;
+  cacheTtlMs?: number;
+  useCache?: boolean;
+  backgroundRefresh?: boolean;
+};
+
+type ModelList = {
+  api: string;
+  data: LiveModel[];
+};
+
+type CacheEntry = ModelList & {
+  cachedAt: number;
+};
+
+type CacheFile = {
+  version?: number;
+  cachedAt?: number;
+  api?: unknown;
+  data?: unknown;
+};
+
+const memoryCache = new Map<string, CacheEntry>();
+const listInflight = new Map<string, Promise<ModelList>>();
 
 // --- helpers ---
 
@@ -314,9 +348,108 @@ export function normalize(url: string) {
   return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
-export async function list(oauth: string, domain: string, version: string) {
+function cacheKey(oauth: string, domain: string) {
+  return createHash("sha256")
+    .update(`${domain}:${oauth}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function scopedCacheKey(key: string, options: ModelListOptions) {
+  return `${cacheDir(options)}:${key}`;
+}
+
+function cacheDir(options: ModelListOptions) {
+  return (
+    options.cacheDir ??
+    process.env.OPENCODE_COPILOT_ENHANCED_CACHE_DIR ??
+    path.join(os.homedir(), ".cache", "opencode-copilot-enhanced")
+  );
+}
+
+function cachePath(key: string, options: ModelListOptions) {
+  return path.join(cacheDir(options), `models-${key}.json`);
+}
+
+function cacheTtl(options: ModelListOptions) {
+  return options.cacheTtlMs ?? MODEL_CACHE_TTL_MS;
+}
+
+function isFresh(entry: CacheEntry, options: ModelListOptions) {
+  return Date.now() - entry.cachedAt < cacheTtl(options);
+}
+
+function parseModelList(api: string, raw: unknown): ModelList {
+  const data = (Array.isArray(raw) ? raw : []).map(toModel).filter((item): item is LiveModel => Boolean(item));
+  return {
+    api,
+    data: data.filter((item) => item.policy?.state !== "disabled").filter(supported),
+  };
+}
+
+function parseCache(value: unknown): CacheEntry | undefined {
+  if (!isRecord(value)) return;
+  const body = value as CacheFile;
+  if (body.version !== MODEL_CACHE_VERSION) return;
+  if (typeof body.cachedAt !== "number" || !Number.isFinite(body.cachedAt)) return;
+  if (typeof body.api !== "string" || body.api.length === 0) return;
+  const result = parseModelList(body.api, body.data);
+  return { ...result, cachedAt: body.cachedAt };
+}
+
+async function readCache(key: string, scopedKey: string, options: ModelListOptions) {
+  if (options.useCache === false) return;
+
+  const memory = memoryCache.get(scopedKey);
+  if (memory) return memory;
+
+  try {
+    const parsed = parseCache(JSON.parse(await readFile(cachePath(key, options), "utf8")));
+    if (!parsed) return;
+    memoryCache.set(scopedKey, parsed);
+    return parsed;
+  } catch {
+    return;
+  }
+}
+
+async function writeCache(key: string, scopedKey: string, entry: CacheEntry, options: ModelListOptions) {
+  if (options.useCache === false) return;
+
+  memoryCache.set(scopedKey, entry);
+  try {
+    await mkdir(cacheDir(options), { recursive: true });
+    await writeFile(
+      cachePath(key, options),
+      JSON.stringify(
+        {
+          version: MODEL_CACHE_VERSION,
+          cachedAt: entry.cachedAt,
+          api: entry.api,
+          data: entry.data,
+        },
+        null,
+        2,
+      ),
+      { mode: 0o600 },
+    );
+  } catch {
+    // Cache writes are best-effort; callers should not fail because the disk
+    // cache is unavailable.
+  }
+}
+
+async function fetchModelList(
+  oauth: string,
+  domain: string,
+  version: string,
+  key: string,
+  scopedKey: string,
+  options: ModelListOptions,
+): Promise<ModelList> {
   const session = await exchange(oauth, domain, version);
   const res = await fetch(`${session.api}/models`, {
+    signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${session.token}`,
       "Copilot-Integration-Id": "vscode-chat",
@@ -334,22 +467,60 @@ export async function list(oauth: string, domain: string, version: string) {
 
   const body = (await res.json()) as { data?: unknown[] } | unknown[];
   const raw = Array.isArray(body) ? body : body.data;
-  const data = (raw ?? []).map(toModel).filter((item): item is LiveModel => Boolean(item));
-  return {
-    api: session.api,
-    data: data.filter((item) => item.policy?.state !== "disabled").filter(supported),
-  };
+  const result = parseModelList(session.api, raw ?? []);
+  await writeCache(key, scopedKey, { ...result, cachedAt: Date.now() }, options);
+  return result;
+}
+
+function refreshModelList(
+  oauth: string,
+  domain: string,
+  version: string,
+  key: string,
+  scopedKey: string,
+  options: ModelListOptions,
+) {
+  const running = listInflight.get(scopedKey);
+  if (running) return running;
+
+  const job = fetchModelList(oauth, domain, version, key, scopedKey, options).finally(() => {
+    listInflight.delete(scopedKey);
+  });
+  listInflight.set(scopedKey, job);
+  return job;
+}
+
+export async function list(
+  oauth: string,
+  domain: string,
+  version: string,
+  options: ModelListOptions = {},
+) {
+  const key = cacheKey(oauth, domain);
+  const scopedKey = scopedCacheKey(key, options);
+  const cached = await readCache(key, scopedKey, options);
+  if (cached && isFresh(cached, options)) return cached;
+
+  if (cached) {
+    if (options.backgroundRefresh !== false) {
+      void refreshModelList(oauth, domain, version, key, scopedKey, options).catch(() => {});
+    }
+    return cached;
+  }
+
+  return refreshModelList(oauth, domain, version, key, scopedKey, options);
 }
 
 export async function sync(
   info: { refresh: string; enterpriseUrl?: string },
   provider: Provider,
   version: string,
+  options: ModelListOptions = {},
 ) {
   const domain = info.enterpriseUrl
     ? normalize(info.enterpriseUrl)
     : "github.com";
-  const result = await list(info.refresh, domain, version);
+  const result = await list(info.refresh, domain, version, options);
   const url =
     result.api ||
     Object.values(provider.models)[0]?.api.url ||

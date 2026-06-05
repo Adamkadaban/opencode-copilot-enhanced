@@ -53,6 +53,21 @@ describe("exchange", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  test("uses an abort signal when exchanging tokens", async () => {
+    const domain = uniqueDomain();
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    let signal: AbortSignal | undefined;
+    const fetchMock = mock((_request: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal as AbortSignal | undefined;
+      return Promise.resolve(mockTokenResponse("tok_signal", expiresAt));
+    });
+    setFetchMock(fetchMock);
+
+    await exchange("oauth_signal", domain, VERSION);
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
   test("uses the endpoints.api field from the response when present", async () => {
     const domain = uniqueDomain();
     const expiresAt = Math.floor(Date.now() / 1000) + 3600;
