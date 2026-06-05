@@ -133,6 +133,34 @@ async function syncProviderModels(info: { refresh: string; enterpriseUrl?: strin
     model.api.npm = "@ai-sdk/github-copilot";
   }
 
+  // Register the "auto" model — Copilot auto-routes to the cheapest adequate
+  // model when the model field is omitted from /chat/completions requests.
+  // Users get a 10% discount on model costs when using auto selection.
+  const autoUrl = api || Object.values(copy.models)[0]?.api.url || "https://api.githubcopilot.com";
+  copy.models["auto"] = {
+    id: "auto",
+    providerID: provider.id,
+    api: { id: "auto", url: autoUrl, npm: "@ai-sdk/github-copilot" },
+    name: "Auto (cheapest model for task)",
+    family: "gpt",
+    capabilities: {
+      temperature: false,
+      reasoning: false,
+      attachment: true,
+      toolcall: true,
+      input: { text: true, audio: false, image: true, video: false, pdf: false },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    limit: { context: 128000, output: 16384 },
+    status: "active",
+    options: {},
+    headers: {},
+    release_date: "",
+    variants: {},
+  };
+
   provider.models = copy.models;
   return api;
 }
@@ -431,8 +459,11 @@ const UNSUPPORTED_BODY_FIELDS = ["service_tier"];
 
 /**
  * Strip fields from the JSON request body that the Copilot API proxy rejects.
- * Models.dev injects `service_tier` for "-fast" variants, but the Copilot
- * proxy doesn't forward it and returns an error instead.
+ *
+ * - `service_tier`: models.dev injects this for "-fast" variants but the
+ *   Copilot proxy doesn't support it.
+ * - `model` when set to `"auto"`: Copilot auto-routes to the cheapest
+ *   adequate model when the field is omitted from /chat/completions requests.
  */
 function stripUnsupportedBody(body: RequestInit["body"]): RequestInit["body"] {
   if (typeof body !== "string") return body;
@@ -445,6 +476,10 @@ function stripUnsupportedBody(body: RequestInit["body"]): RequestInit["body"] {
         delete parsed[field];
         changed = true;
       }
+    }
+    if (parsed.model === "auto") {
+      delete parsed.model;
+      changed = true;
     }
     return changed ? JSON.stringify(parsed) : body;
   } catch {

@@ -184,6 +184,41 @@ describe("fetchWithCopilotAuth", () => {
     expect(parsed.model).toBe("gpt-5.5");
     expect(parsed.messages).toHaveLength(1);
   });
+
+  test("strips model field when set to 'auto' for Copilot auto-routing", async () => {
+    const exchangeSession = mock(async () => session);
+    const invalidateSession = mock(() => {});
+    const sleepImpl = mock(async () => {});
+
+    let sentBody: string | undefined;
+    const fetchImpl = mock(async (_request: RequestInfo | URL, init?: RequestInit) => {
+      sentBody = typeof init?.body === "string" ? init.body : undefined;
+      return new Response("ok", { status: 200 });
+    });
+
+    await fetchWithCopilotAuth(
+      async () => ({ type: "oauth", refresh: "oauth_token" }),
+      "https://api.githubcopilot.com/chat/completions",
+      {
+        body: JSON.stringify({
+          model: "auto",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      },
+      VERSION,
+      {
+        exchangeSession,
+        invalidateSession,
+        fetchImpl,
+        sleepImpl,
+      },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(sentBody!);
+    expect(parsed.model).toBeUndefined();
+    expect(parsed.messages).toHaveLength(1);
+  });
 });
 
 describe("model syncing", () => {
