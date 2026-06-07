@@ -5,6 +5,7 @@ import { sync, normalize, type Provider } from "./models.js";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const VERSION = "1.0.0";
+const COPILOT_API_VERSION = "2026-06-01";
 const POLL_MARGIN = 3000; // 3 s safety buffer for OAuth polling
 const RETRY_DELAY = 250;
 
@@ -434,6 +435,20 @@ function shouldRetry499(url: string, response: Response) {
 /** Fields the Copilot proxy does not support. */
 const UNSUPPORTED_BODY_FIELDS = ["service_tier"];
 
+function headersToRecord(input?: HeadersInit) {
+  return Object.fromEntries(new Headers(input).entries());
+}
+
+function setCopilotApiVersion(headers: Record<string, string>) {
+  let incoming: string | undefined;
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() !== "x-github-api-version") continue;
+    incoming ??= headers[key];
+    delete headers[key];
+  }
+  headers["X-GitHub-Api-Version"] = incoming ?? COPILOT_API_VERSION;
+}
+
 /**
  * Strip fields from the JSON request body that the Copilot API proxy rejects.
  *
@@ -484,15 +499,15 @@ export async function fetchWithCopilotAuth(
 
     const headers: Record<string, string> = {
       "x-initiator": isAgent ? "agent" : "user",
-      ...(init?.headers as Record<string, string>),
+      ...headersToRecord(init?.headers),
       "User-Agent": `opencode/${version}`,
       Authorization: `Bearer ${session.token}`,
       "Openai-Intent": "conversation-edits",
       "Copilot-Integration-Id": "vscode-chat",
       "Editor-Version": "vscode/1.100.0",
       "Editor-Plugin-Version": "copilot-chat/0.38.0",
-      "X-GitHub-Api-Version": "2025-10-01",
     };
+    setCopilotApiVersion(headers);
 
     if (isVision) headers["Copilot-Vision-Request"] = "true";
 

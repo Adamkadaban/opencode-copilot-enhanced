@@ -191,6 +191,42 @@ describe("fetchWithCopilotAuth", () => {
     expect(parsed.messages).toHaveLength(1);
   });
 
+  test("preserves an incoming Copilot API version without sending duplicate casing", async () => {
+    const exchangeSession = mock(async () => session);
+    const invalidateSession = mock(() => {});
+    const sleepImpl = mock(async () => {});
+
+    let sentHeaders: Record<string, string> | undefined;
+    const fetchImpl = mock(async (_request: RequestInfo | URL, init?: RequestInit) => {
+      sentHeaders = init?.headers as Record<string, string>;
+      return new Response("ok", { status: 200 });
+    });
+
+    await fetchWithCopilotAuth(
+      async () => ({ type: "oauth", refresh: "oauth_token" }),
+      "https://api.githubcopilot.com/responses",
+      {
+        headers: {
+          "x-github-api-version": "2026-06-01",
+        },
+        body: JSON.stringify({
+          model: "gpt-5.5",
+          input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        }),
+      },
+      VERSION,
+      {
+        exchangeSession,
+        invalidateSession,
+        fetchImpl,
+        sleepImpl,
+      },
+    );
+
+    expect(sentHeaders?.["X-GitHub-Api-Version"]).toBe("2026-06-01");
+    expect(sentHeaders?.["x-github-api-version"]).toBeUndefined();
+  });
+
 });
 
 describe("model syncing", () => {

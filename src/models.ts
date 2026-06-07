@@ -94,7 +94,7 @@ export type Model = {
   status: "alpha" | "beta" | "deprecated" | "active";
   options: Record<string, unknown>;
   headers: Record<string, string>;
-  release_date?: string;
+  release_date: string;
   variants?: Record<string, Record<string, unknown>>;
 };
 
@@ -456,7 +456,7 @@ async function fetchModelList(
       "Editor-Version": "vscode/1.100.0",
       "Editor-Plugin-Version": "copilot-chat/0.38.0",
       "User-Agent": `opencode/${version}`,
-      "X-GitHub-Api-Version": "2025-10-01",
+      "X-GitHub-Api-Version": "2026-06-01",
     },
   });
 
